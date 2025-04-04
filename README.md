@@ -24,7 +24,7 @@ After installation, you will see a Tampermonkey icon in your browser's toolbar. 
 
 ### 2. Install the Script
 
-1. Open the script file: [`Genotek family tree downloader-0.1.user.js`](./Genotek family tree downloader-0.1.user.js)
+1. Open the script file: [`genotek_gedcom_export.user.js`](./genotek_gedcom_export.user.js)
 2. Tampermonkey will prompt you to install it
 3. Click "Install"
 
