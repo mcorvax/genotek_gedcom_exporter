@@ -46,3 +46,7 @@ After installation, you will see a Tampermonkey icon in your browser's toolbar. 
 ## Contributions
 
 Feel free to open issues, fork the repo, or submit pull requests.
+
+## Powered by People and AI
+
+This tool was built with human curiosity and machine fluency. Thanks, ChatGPT!
