@@ -34,7 +34,9 @@ After installation, you will see a Tampermonkey icon in your browser's toolbar. 
 2. Open your genealogical tree
 3. Wait for the page to load
 4. Click the "Скачать GEDCOM" button near the zoom controls
+   
    ![image](https://github.com/user-attachments/assets/7c7712f2-80fc-496d-b5a1-3ef85ec6d4fe)
+
 6. The file will download automatically
 
 ## Compatibility
