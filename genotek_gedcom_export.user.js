@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Genotek family tree downloader
 // @namespace    http://tampermonkey.net/
-// @version      0.3
+// @version      0.4
 // @description  Add a button to the page that runs a function
 // @match        https://lk.genotek.ru/*
 // @grant        none
@@ -94,7 +94,7 @@
                 const gedcomText = exportGenotekToGedcom(tree);
                 let filename = 'relative_genotek_family_tree.ged';
 
-                if (tree.data.source === null && tree.data.patientId) {
+                if (tree.data.patientId) {
                     const matchingNode = tree.data.nodes?.find(
                         node => node.card?.patientId === tree.data.patientId
                     );
