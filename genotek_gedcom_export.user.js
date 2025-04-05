@@ -3,43 +3,117 @@
 // @namespace    http://tampermonkey.net/
 // @version      0.1
 // @description  Add a button to the page that runs a function
-// @match        https://lk.genotek.ru/genealogical-tree
+// @match        https://lk.genotek.ru/*
 // @grant        none
 // ==/UserScript==
+
 
 (function () {
     'use strict';
 
-    function waitForMenuItem(text, callback) {
+    // Part 1. Injection ne item into the menu
+
+    function injectGedcomMenuItem() {
+        if (document.getElementById('gedcom-menu-item')) return;
+
+        const items = document.querySelectorAll('.tree__actions-btn-menu-item');
+        for (const item of items) {
+            if (item.textContent.includes('Загрузить GEDCOM')) {
+                const newItem = item.cloneNode(true);
+                newItem.id = 'gedcom-menu-item';
+                newItem.querySelector('i').className = 'icon-download';
+                newItem.childNodes[1].textContent = 'Сохранить GEDCOM';
+
+                newItem.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const tree = window.__myGenealogyTree;
+                    if (!tree) {
+                        alert('Генеалогическое дерево еще не загружено.');
+                        return;
+                    }
+                    const gedcomText = exportGenotekToGedcom(tree);
+                    saveGedcom(gedcomText, 'tree.ged');
+                });
+
+                item.parentNode.insertBefore(newItem, item.nextSibling);
+                return;
+            }
+        }
+    }
+
+
+
+    function pollForMenuAndInject(maxTries = 20, delay = 100) {
+        let tries = 0;
         const interval = setInterval(() => {
             const items = document.querySelectorAll('.tree__actions-btn-menu-item');
-            for (let item of items) {
-                if (item.textContent.includes(text)) {
+            for (const item of items) {
+                if (
+                    item.textContent.includes('Загрузить GEDCOM') &&
+                    !document.getElementById('gedcom-menu-item')
+                ) {
+                    console.log('[GEDCOM] Injecting menu item');
+                    injectGedcomMenuItem();
                     clearInterval(interval);
-                    callback(item);
                     return;
                 }
             }
-        }, 500);
+            if (++tries >= maxTries) {
+                console.log('[GEDCOM] Menu not found, giving up');
+                clearInterval(interval);
+            }
+        }, delay);
     }
 
-    waitForMenuItem("Загрузить GEDCOM", (targetEl) => {
-        // Clone the existing GEDCOM upload item for consistent styling
-        const newItem = targetEl.cloneNode(true);
-        newItem.querySelector('i').className = 'icon-download'; // change icon
-        newItem.childNodes[1].textContent = 'Сохранить GEDCOM'; // change label
 
-        // Add your custom action
-        newItem.addEventListener('click', (e) => {
-            e.stopPropagation();
-            // Make sure this is called after `window.__myGenealogyTree` is filled
-            const gedcomText = exportGenotekToGedcom(window.__myGenealogyTree);
-            saveGedcom(gedcomText);
+    function setupInjectionOnMenuOpen() {
+        document.body.addEventListener('click', (e) => {
+            const btn = e.target.closest('.tree__actions-btn');
+            if (btn) {
+                setTimeout(() => {
+                    pollForMenuAndInject(); // ← use polling instead of MutationObserver
+                }, 50);
+            }
         });
+    }
 
-        // Insert after the matched element
-        targetEl.parentNode.insertBefore(newItem, targetEl.nextSibling);
-    });
+    // === SPA NAVIGATION DETECTOR ===
+    function checkIfTreePage() {
+        if (location.pathname.includes('/genealogical-tree')) {
+            setupInjectionOnMenuOpen();
+        }
+    }
+
+    function hookSPAChanges() {
+        const originalPushState = history.pushState;
+        const originalReplaceState = history.replaceState;
+
+        history.pushState = function (...args) {
+            originalPushState.apply(this, args);
+            setTimeout(checkIfTreePage, 100);
+        };
+
+        history.replaceState = function (...args) {
+            originalReplaceState.apply(this, args);
+            setTimeout(checkIfTreePage, 100);
+        };
+
+        window.addEventListener('popstate', checkIfTreePage);
+    }
+
+    if (document.readyState === 'complete' || document.readyState === 'interactive') {
+        hookSPAChanges();
+        checkIfTreePage(); // run immediately in case already on tree page
+    } else {
+        window.addEventListener('DOMContentLoaded', () => {
+            hookSPAChanges();
+            checkIfTreePage();
+        });
+    }
+
+
+
+    // Part 2. GEDCOM generation
 
 
     const originalXHR = XMLHttpRequest.prototype.open;
