@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Genotek family tree downloader
 // @namespace    http://tampermonkey.net/
-// @version      0.1
+// @version      0.2
 // @description  Add a button to the page that runs a function
 // @match        https://lk.genotek.ru/*
 // @grant        none
@@ -43,6 +43,76 @@
 
 
 
+
+
+    function injectRelativesPageGedcomButton() {
+        const style = document.createElement('style');
+        style.innerHTML = `
+    .tree__gedcom-download-btn {
+      background: white !important;
+      border-radius: 12px !important;
+      padding: 10px !important;
+      margin-top: 10px !important;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1) !important;
+      cursor: pointer !important;
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      width: 36px !important;
+      height: 36px !important;
+      z-index: 9999 !important;
+      pointer-events: auto !important;
+    }
+
+    .tree__gedcom-download-btn i {
+      font-size: 18px !important;
+      pointer-events: none !important;
+    }
+  `;
+        document.head.appendChild(style);
+
+        const interval = setInterval(() => {
+            const container = document.querySelector('.tree__actions');
+            if (!container || container.querySelector('#gedcom-relatives-btn')) return;
+
+            clearInterval(interval);
+
+            const btn = document.createElement('div');
+            btn.id = 'gedcom-relatives-btn';
+            btn.title = 'Сохранить GEDCOM';
+            btn.className = 'tree__gedcom-download-btn';
+
+            const icon = document.createElement('i');
+            icon.className = 'icon-download';
+            btn.appendChild(icon);
+
+            // ✨ Add click handler
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const tree = window.__myGenealogyTree;
+                if (!tree) {
+                    alert('Генеалогическое дерево еще не загружено.');
+                    return;
+                }
+                const gedcomText = exportGenotekToGedcom(tree);
+                saveGedcom(gedcomText, 'tree.ged');
+            });
+
+            // Insert the button BELOW the zoom buttons
+            const zoomContainer = container.querySelector('.tree__zoom');
+            if (zoomContainer) {
+                zoomContainer.after(btn);
+            } else {
+                container.appendChild(btn);
+            }
+
+        }, 300);
+    }
+
+
+
+
+
     function pollForMenuAndInject(maxTries = 20, delay = 100) {
         let tries = 0;
         const interval = setInterval(() => {
@@ -81,6 +151,16 @@
     function checkIfTreePage() {
         if (location.pathname.includes('/genealogical-tree')) {
             setupInjectionOnMenuOpen();
+        } else if (location.pathname.includes('/ancestry/relatives')) {
+            const btn = document.getElementById('gedcom-relatives-btn');
+            if (btn) btn.remove();
+            const interval = setInterval(() => {
+                const button = document.querySelector('button.find-relation-graph__modal-place');
+                if (button) {
+                    clearInterval(interval);
+                    injectRelativesPageGedcomButton();
+                }
+            }, 300);
         }
     }
 
@@ -125,7 +205,8 @@
     const originalSend = XMLHttpRequest.prototype.send;
     XMLHttpRequest.prototype.send = function() {
         this.addEventListener('load', function() {
-            if (this.__url && this.__url.includes('/api/v1/genealogy-graph/')) {
+            // api/v1/site/1/relatives/VJ8248/8ec016a33c403d578e1517d152c6ef9f/genealogy-graph
+            if (this.__url && this.__url.includes('/genealogy-graph')) {
                 try {
                     const data = JSON.parse(this.responseText);
                     window.__myGenealogyTree = data;
