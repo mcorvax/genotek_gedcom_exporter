@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Genotek family tree downloader
 // @namespace    http://tampermonkey.net/
-// @version      0.2
+// @version      0.3
 // @description  Add a button to the page that runs a function
 // @match        https://lk.genotek.ru/*
 // @grant        none
@@ -32,7 +32,7 @@
                         return;
                     }
                     const gedcomText = exportGenotekToGedcom(tree);
-                    saveGedcom(gedcomText, 'tree.ged');
+                    saveGedcom(gedcomText);
                 });
 
                 item.parentNode.insertBefore(newItem, item.nextSibling);
@@ -40,9 +40,6 @@
             }
         }
     }
-
-
-
 
 
     function injectRelativesPageGedcomButton() {
@@ -95,7 +92,29 @@
                     return;
                 }
                 const gedcomText = exportGenotekToGedcom(tree);
-                saveGedcom(gedcomText, 'tree.ged');
+                let filename = 'relative_genotek_family_tree.ged';
+
+                if (tree.data.source === null && tree.data.patientId) {
+                    const matchingNode = tree.data.nodes?.find(
+                        node => node.card?.patientId === tree.data.patientId
+                    );
+
+                    if (matchingNode?.card) {
+                        const card = matchingNode.card || {};
+                        const name = (card.name || []).join('_');
+                        const middleName = (card.middleName || []).join('_');
+                        const surname = (card.surname || []).join('_');
+                        const maiden = (card.maidenName || []).join('_');
+
+                        const fullName = [name, middleName, surname]
+                        .filter(Boolean)
+                        .join('_')
+                        .replace(/\s+/g, '_')
+                        .replace(/[^\p{L}\p{N}_-]/gu, ''); // remove problematic characters
+                        filename = fullName+'.ged';
+                    }
+                }
+                saveGedcom(gedcomText, filename);
             });
 
             // Insert the button BELOW the zoom buttons
@@ -108,9 +127,6 @@
 
         }, 300);
     }
-
-
-
 
 
     function pollForMenuAndInject(maxTries = 20, delay = 100) {
@@ -151,9 +167,9 @@
     function checkIfTreePage() {
         if (location.pathname.includes('/genealogical-tree')) {
             setupInjectionOnMenuOpen();
-        } else if (location.pathname.includes('/ancestry/relatives')) {
             const btn = document.getElementById('gedcom-relatives-btn');
             if (btn) btn.remove();
+        } else if (location.pathname.includes('/ancestry/relatives')) {
             const interval = setInterval(() => {
                 const button = document.querySelector('button.find-relation-graph__modal-place');
                 if (button) {
@@ -219,7 +235,7 @@
         return originalSend.apply(this, arguments);
     };
 
-    function saveGedcom(gedcomText, filename = 'tree.ged') {
+    function saveGedcom(gedcomText, filename = 'my_genotek_family_tree.ged') {
         const blob = new Blob([gedcomText], { type: 'text/plain' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
