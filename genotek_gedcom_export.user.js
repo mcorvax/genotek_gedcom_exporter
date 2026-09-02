@@ -2,48 +2,75 @@
 // @name         Genotek family tree downloader
 // @namespace    http://tampermonkey.net/
 // @version      0.4
-// @description  Add a button to the page that runs a function
+// @description  Export the Genotek relatives tree as GEDCOM
 // @match        https://lk.genotek.ru/*
 // @grant        none
+// @run-at       document-start
 // ==/UserScript==
 
 
 (function () {
     'use strict';
 
-    // Part 1. Injection ne item into the menu
+    const GRAPH_URL_PART = '/genealogy-graph';
+    let genealogyTree = null;
 
-    function injectGedcomMenuItem() {
-        if (document.getElementById('gedcom-menu-item')) return;
+    function rememberTree(data) {
+        if (!data || !Array.isArray(data.data?.nodes)) return;
+        genealogyTree = data;
+        // Kept for backwards compatibility and easy inspection in DevTools.
+        window.__myGenealogyTree = data;
+        updateButtonState();
+        console.info(`[GEDCOM] Captured ${data.data.nodes.length} tree nodes`);
+    }
 
-        const items = document.querySelectorAll('.tree__actions-btn-menu-item');
-        for (const item of items) {
-            if (item.textContent.includes('Загрузить GEDCOM')) {
-                const newItem = item.cloneNode(true);
-                newItem.id = 'gedcom-menu-item';
-                newItem.querySelector('i').className = 'icon-download';
-                newItem.childNodes[1].textContent = 'Сохранить GEDCOM';
-
-                newItem.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    const tree = window.__myGenealogyTree;
-                    if (!tree) {
-                        alert('Генеалогическое дерево еще не загружено.');
-                        return;
-                    }
-                    const gedcomText = exportGenotekToGedcom(tree);
-                    saveGedcom(gedcomText);
-                });
-
-                item.parentNode.insertBefore(newItem, item.nextSibling);
-                return;
-            }
+    function parseTreeResponse(payload) {
+        try {
+            rememberTree(typeof payload === 'string' ? JSON.parse(payload) : payload);
+        } catch (error) {
+            console.warn('[GEDCOM] Could not parse genealogy graph response', error);
         }
+    }
+
+    // Install the network hooks immediately. Angular can request the graph before
+    // DOMContentLoaded, so doing this after UI setup loses the response.
+    const originalXhrOpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function (method, url) {
+        this.__gedcomUrl = String(url);
+        return originalXhrOpen.apply(this, arguments);
+    };
+
+    const originalXhrSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.send = function () {
+        if (this.__gedcomUrl?.includes(GRAPH_URL_PART)) {
+            this.addEventListener('load', () => parseTreeResponse(
+                this.responseType === '' || this.responseType === 'text'
+                    ? this.responseText
+                    : this.response
+            ));
+        }
+        return originalXhrSend.apply(this, arguments);
+    };
+
+    const originalFetch = window.fetch;
+    if (originalFetch) {
+        window.fetch = async function (input, init) {
+            const response = await originalFetch.apply(this, arguments);
+            const url = typeof input === 'string' ? input : input?.url;
+            if (url?.includes(GRAPH_URL_PART)) {
+                response.clone().json().then(rememberTree).catch(error => {
+                    console.warn('[GEDCOM] Could not parse genealogy graph fetch', error);
+                });
+            }
+            return response;
+        };
     }
 
 
     function injectRelativesPageGedcomButton() {
+        if (document.getElementById('gedcom-download-style')) return;
         const style = document.createElement('style');
+        style.id = 'gedcom-download-style';
         style.innerHTML = `
     .tree__gedcom-download-btn {
       background: white !important;
@@ -67,28 +94,37 @@
     }
   `;
         document.head.appendChild(style);
+    }
 
-        const interval = setInterval(() => {
-            const container = document.querySelector('.tree__actions');
-            if (!container || container.querySelector('#gedcom-relatives-btn')) return;
+    function updateButtonState() {
+        const btn = document.getElementById('gedcom-relatives-btn');
+        if (!btn) return;
+        btn.title = genealogyTree
+            ? `Сохранить GEDCOM (${genealogyTree.data.nodes.length} записей)`
+            : 'Ожидание загрузки дерева…';
+        btn.style.opacity = genealogyTree ? '1' : '0.55';
+    }
 
-            clearInterval(interval);
+    function ensureGedcomButton() {
+        if (!location.pathname.includes('/ancestry/relatives')) return;
+        injectRelativesPageGedcomButton();
+        const container = document.querySelector('.tree__actions');
+        if (!container || container.querySelector('#gedcom-relatives-btn')) return;
 
-            const btn = document.createElement('div');
-            btn.id = 'gedcom-relatives-btn';
-            btn.title = 'Сохранить GEDCOM';
-            btn.className = 'tree__gedcom-download-btn';
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.id = 'gedcom-relatives-btn';
+        btn.className = 'tree__gedcom-download-btn';
 
-            const icon = document.createElement('i');
-            icon.className = 'icon-download';
-            btn.appendChild(icon);
+        const icon = document.createElement('i');
+        icon.className = 'icon-download';
+        btn.appendChild(icon);
 
-            // ✨ Add click handler
-            btn.addEventListener('click', (e) => {
+        btn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                const tree = window.__myGenealogyTree;
+                const tree = genealogyTree || window.__myGenealogyTree;
                 if (!tree) {
-                    alert('Генеалогическое дерево еще не загружено.');
+                    alert('Данные дерева еще не получены. Обновите страницу при включенном userscript.');
                     return;
                 }
                 const gedcomText = exportGenotekToGedcom(tree);
@@ -104,136 +140,46 @@
                         const name = (card.name || []).join('_');
                         const middleName = (card.middleName || []).join('_');
                         const surname = (card.surname || []).join('_');
-                        const maiden = (card.maidenName || []).join('_');
-
                         const fullName = [name, middleName, surname]
                         .filter(Boolean)
                         .join('_')
                         .replace(/\s+/g, '_')
                         .replace(/[^\p{L}\p{N}_-]/gu, ''); // remove problematic characters
-                        filename = fullName+'.ged';
+                        if (fullName) filename = `${fullName}.ged`;
                     }
                 }
                 saveGedcom(gedcomText, filename);
-            });
-
-            // Insert the button BELOW the zoom buttons
-            const zoomContainer = container.querySelector('.tree__zoom');
-            if (zoomContainer) {
-                zoomContainer.after(btn);
-            } else {
-                container.appendChild(btn);
-            }
-
-        }, 300);
-    }
-
-
-    function pollForMenuAndInject(maxTries = 20, delay = 100) {
-        let tries = 0;
-        const interval = setInterval(() => {
-            const items = document.querySelectorAll('.tree__actions-btn-menu-item');
-            for (const item of items) {
-                if (
-                    item.textContent.includes('Загрузить GEDCOM') &&
-                    !document.getElementById('gedcom-menu-item')
-                ) {
-                    console.log('[GEDCOM] Injecting menu item');
-                    injectGedcomMenuItem();
-                    clearInterval(interval);
-                    return;
-                }
-            }
-            if (++tries >= maxTries) {
-                console.log('[GEDCOM] Menu not found, giving up');
-                clearInterval(interval);
-            }
-        }, delay);
-    }
-
-
-    function setupInjectionOnMenuOpen() {
-        document.body.addEventListener('click', (e) => {
-            const btn = e.target.closest('.tree__actions-btn');
-            if (btn) {
-                setTimeout(() => {
-                    pollForMenuAndInject(); // ← use polling instead of MutationObserver
-                }, 50);
-            }
         });
-    }
 
-    // === SPA NAVIGATION DETECTOR ===
-    function checkIfTreePage() {
-        if (location.pathname.includes('/genealogical-tree')) {
-            setupInjectionOnMenuOpen();
-            const btn = document.getElementById('gedcom-relatives-btn');
-            if (btn) btn.remove();
-        } else if (location.pathname.includes('/ancestry/relatives')) {
-            const interval = setInterval(() => {
-                const button = document.querySelector('button.find-relation-graph__modal-place');
-                if (button) {
-                    clearInterval(interval);
-                    injectRelativesPageGedcomButton();
-                }
-            }, 300);
+        // Insert the button below the zoom controls.
+        const zoomContainer = container.querySelector('.tree__zoom');
+        if (zoomContainer) {
+            zoomContainer.after(btn);
+        } else {
+            container.appendChild(btn);
         }
+        updateButtonState();
     }
 
-    function hookSPAChanges() {
-        const originalPushState = history.pushState;
-        const originalReplaceState = history.replaceState;
-
-        history.pushState = function (...args) {
-            originalPushState.apply(this, args);
-            setTimeout(checkIfTreePage, 100);
-        };
-
-        history.replaceState = function (...args) {
-            originalReplaceState.apply(this, args);
-            setTimeout(checkIfTreePage, 100);
-        };
-
-        window.addEventListener('popstate', checkIfTreePage);
-    }
-
-    if (document.readyState === 'complete' || document.readyState === 'interactive') {
-        hookSPAChanges();
-        checkIfTreePage(); // run immediately in case already on tree page
-    } else {
-        window.addEventListener('DOMContentLoaded', () => {
-            hookSPAChanges();
-            checkIfTreePage();
+    function startUiObserver() {
+        ensureGedcomButton();
+        new MutationObserver(ensureGedcomButton).observe(document.body, {
+            childList: true,
+            subtree: true
         });
+        window.addEventListener('popstate', () => setTimeout(ensureGedcomButton));
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', startUiObserver, { once: true });
+    } else {
+        startUiObserver();
     }
 
 
 
     // Part 2. GEDCOM generation
 
-
-    const originalXHR = XMLHttpRequest.prototype.open;
-    XMLHttpRequest.prototype.open = function(method, url) {
-        this.__url = url;
-        return originalXHR.apply(this, arguments);
-    };
-
-    const originalSend = XMLHttpRequest.prototype.send;
-    XMLHttpRequest.prototype.send = function() {
-        this.addEventListener('load', function() {
-            // api/v1/site/1/relatives/VJ8248/8ec016a33c403d578e1517d152c6ef9f/genealogy-graph
-            if (this.__url && this.__url.includes('/genealogy-graph')) {
-                try {
-                    const data = JSON.parse(this.responseText);
-                    window.__myGenealogyTree = data;
-                } catch (e) {
-                    console.warn("Failed to parse XHR response JSON:", e);
-                }
-            }
-        });
-
-        return originalSend.apply(this, arguments);
-    };
 
     function saveGedcom(gedcomText, filename = 'my_genotek_family_tree.ged') {
         const blob = new Blob([gedcomText], { type: 'text/plain' });
@@ -251,9 +197,6 @@
         const families = [];
         const familyMap = {};
         const relationshipMap = {};
-        let personCounter = 1;
-        let familyCounter = 1;
-
         const individualBlocks = [];
         const familyBlocks = [];
 
@@ -265,7 +208,7 @@
             ];
             const parts = [];
             if (obj.day) parts.push(obj.day);
-            if (obj.month) parts.push(monthNames[obj.month]);
+            if (obj.month && monthNames[obj.month]) parts.push(monthNames[obj.month]);
             parts.push(obj.year);
             return parts.join(' ');
         }
@@ -292,7 +235,7 @@
         for (const node of nodes) {
             if (node.type === 'MALE' || node.type === 'FEMALE') {
                 const id = node.id;
-                const gedcomId = `@I${personCounter++}@`;
+                const gedcomId = `@I${id}@`;
                 peopleMap[id] = { gedcomId, data: node, fams: new Set(), famc: new Set() };
             }
         }
@@ -303,19 +246,21 @@
                 const parts = node.id.split('_');
                 const fatherId = parts[1] !== 'none' ? parts[1] : null;
                 const motherId = parts[2] !== 'none' ? parts[2] : null;
+                const uid = node.id
 
                 const husbandGedcom = (fatherId && peopleMap[fatherId]) ? peopleMap[fatherId].gedcomId : null;
                 const wifeGedcom = (motherId && peopleMap[motherId]) ? peopleMap[motherId].gedcomId : null;
 
                 if (!husbandGedcom && !wifeGedcom) continue;
 
-                const famId = `@F${familyCounter++}@`;
+                const famId = `@F${uid}@`;
 
                 if (fatherId && peopleMap[fatherId]) peopleMap[fatherId].fams.add(famId);
                 if (motherId && peopleMap[motherId]) peopleMap[motherId].fams.add(famId);
 
                 families.push({
                     gedcomId: famId,
+                    uid: uid,
                     husbandId: husbandGedcom,
                     wifeId: wifeGedcom,
                     children: [],
@@ -409,6 +354,10 @@
                 lines.push(`1 FAMC ${fid}`);
             }
 
+            lines.push(`1 _UID ${card.id || personId}`);
+            lines.push(`1 REFN ${card.id || personId}`);
+            lines.push('2 TYPE GenotekID');
+
             individualBlocks.push(lines.join('\n'));
         }
 
@@ -435,6 +384,10 @@
                     if (date) lines.push(`2 DATE ${date}`);
                 }
             }
+
+            lines.push(`1 _UID ${fam.uid}`);
+            lines.push(`1 REFN ${fam.uid}`);
+            lines.push('2 TYPE GenotekFamilyID');
 
             familyBlocks.push(lines.join('\n'));
         }
