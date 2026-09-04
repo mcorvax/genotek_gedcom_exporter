@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "Family Tree Downloader",
+  "version": "0.4.0",
+  "description": "Export a Genotek family tree as a GEDCOM file.",
+  "content_scripts": [
+    {
+      "matches": [
+        "https://lk.genotek.ru/*"
+      ],
+      "js": [
+        "genotek_gedcom_export.user.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    }
+  ],
+  "icons": {
+    "128": "icon-128.png"
+  }
+}
