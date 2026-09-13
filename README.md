@@ -4,7 +4,8 @@ This script allows you to export your Genotek genealogical tree as a standard GE
 
 ## Features
 
-- Adds a "Скачать GEDCOM" button to the Genotek interface
+- Adds an export button to the relatives tree page
+- Adds "Download GEDOM" after "Upload GEDCOM" in the own-tree three-dot menu
 - Exports your full genealogical tree in `.ged` format
 - Clean, valid GEDCOM 5.5.1 output with no GRAMPS warnings
 
@@ -33,7 +34,8 @@ After installation, you will see a Tampermonkey icon in your browser's toolbar. 
 1. Go to [https://lk.genotek.ru](https://lk.genotek.ru)
 2. Open your genealogical tree
 3. Wait for the page to load
-4. Click the "Скачать GEDCOM" button near the zoom controls
+4. On the relatives page, click the download button near the zoom controls. On
+   `/genealogical-tree`, open the three-dot menu and click "Download GEDOM".
    
    ![image](https://github.com/user-attachments/assets/7c7712f2-80fc-496d-b5a1-3ef85ec6d4fe)
 
