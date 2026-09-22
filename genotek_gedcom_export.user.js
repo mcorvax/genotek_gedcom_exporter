@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Genotek family tree downloader
 // @namespace    http://tampermonkey.net/
-// @version      0.5.2
+// @version      0.6.1
 // @description  Export Genotek family trees as GEDCOM
 // @match        https://lk.genotek.ru/*
 // @match        https://my.genotek.eu/*
@@ -14,7 +14,27 @@
     'use strict';
 
     const GRAPH_URL_PART = '/genealogy-graph';
+    const SEGMENT_URL = /\/api\/v1\/site\/1\/relatives\/[^/]+\/[^/?#]+\/segment(?:[?#]|$)/;
+    const SEGMENT_FIELDS = ['chromosome', 'hapId1', 'hapId2', 'startCm', 'endCm', 'startBp', 'endBp', 'ethnicity'];
+    const SCIENTIFIC_DATA_LABEL = /^(?:Научные данные|Scientific data)$/i;
+    const COMMON_SEGMENTS_LABEL = /^(?:Общие ДНК-сегменты|General DNA segments)$/i;
     let genealogyTree = null;
+    let segmentData = null;
+    let segmentEpoch = 0;
+
+    function rememberSegments(response, epoch) {
+        if (epoch !== segmentEpoch || !Array.isArray(response?.data)) return;
+        segmentData = response.data;
+        ensureSegmentTable();
+    }
+
+    function parseSegments(payload, epoch) {
+        try {
+            rememberSegments(typeof payload === 'string' ? JSON.parse(payload) : payload, epoch);
+        } catch (error) {
+            console.warn('[GEDCOM] Could not parse segment response', error);
+        }
+    }
 
     function rememberTree(response) {
         const data = Array.isArray(response?.data?.nodes)
@@ -53,17 +73,33 @@
                     : this.response
             ));
         }
+        if (SEGMENT_URL.test(this.__gedcomUrl || '')) {
+            const epoch = segmentEpoch;
+            this.addEventListener('load', () => parseSegments(
+                this.responseType === '' || this.responseType === 'text'
+                    ? this.responseText
+                    : this.response,
+                epoch
+            ));
+        }
         return originalXhrSend.apply(this, arguments);
     };
 
     const originalFetch = window.fetch;
     if (originalFetch) {
         window.fetch = async function (input, init) {
-            const response = await originalFetch.apply(this, arguments);
             const url = typeof input === 'string' ? input : input?.url;
+            const segmentRequest = SEGMENT_URL.test(url || '');
+            const epoch = segmentEpoch;
+            const response = await originalFetch.apply(this, arguments);
             if (url?.includes(GRAPH_URL_PART)) {
                 response.clone().json().then(rememberTree).catch(error => {
                     console.warn('[GEDCOM] Could not parse genealogy graph fetch', error);
+                });
+            }
+            if (segmentRequest) {
+                response.clone().json().then(data => rememberSegments(data, epoch)).catch(error => {
+                    console.warn('[GEDCOM] Could not parse segment fetch', error);
                 });
             }
             return response;
@@ -206,9 +242,55 @@
     function ensurePageControls() {
         ensureGedcomButton();
         ensureOwnTreeMenuItem();
+        ensureSegmentTable();
+    }
+
+    function ensureSegmentTable() {
+        if (!location.pathname.includes('/ancestry/relatives') || !segmentData) return;
+        const title = Array.from(document.querySelectorAll(
+            '.find-relation-science-data__modal-body-title'
+        )).find(element => COMMON_SEGMENTS_LABEL.test(element.querySelector('span')?.textContent.trim() || ''));
+        if (!title || title.nextElementSibling?.id === 'genotek-segment-table') return;
+
+        const wrapper = document.createElement('div');
+        wrapper.id = 'genotek-segment-table';
+        wrapper.style.cssText = 'width:100%;overflow-x:auto;margin:15px 0 20px';
+        const table = document.createElement('table');
+        table.style.cssText = 'width:100%;border-collapse:collapse;font-size:13px;text-align:left';
+        const header = document.createElement('tr');
+        for (const field of SEGMENT_FIELDS) {
+            const cell = document.createElement('th');
+            cell.textContent = field;
+            cell.style.cssText = 'padding:6px 8px;border-bottom:1px solid #b2bcc8;white-space:nowrap';
+            header.appendChild(cell);
+        }
+        const thead = document.createElement('thead');
+        thead.appendChild(header);
+        table.appendChild(thead);
+        const tbody = document.createElement('tbody');
+        for (const segment of segmentData) {
+            const row = document.createElement('tr');
+            for (const field of SEGMENT_FIELDS) {
+                const cell = document.createElement('td');
+                cell.textContent = segment?.[field] == null ? '' : String(segment[field]);
+                cell.style.cssText = 'padding:6px 8px;border-bottom:1px solid #e4e4e4;white-space:nowrap';
+                row.appendChild(cell);
+            }
+            tbody.appendChild(row);
+        }
+        table.appendChild(tbody);
+        wrapper.appendChild(table);
+        title.after(wrapper);
     }
 
     function startUiObserver() {
+        document.body.addEventListener('click', event => {
+            const link = event.target.closest('.find-relation__card-header-action');
+            if (!link || !SCIENTIFIC_DATA_LABEL.test(link.textContent.trim())) return;
+            segmentEpoch += 1;
+            segmentData = null;
+            document.getElementById('genotek-segment-table')?.remove();
+        }, true);
         ensurePageControls();
         new MutationObserver(ensurePageControls).observe(document.body, {
             childList: true,
