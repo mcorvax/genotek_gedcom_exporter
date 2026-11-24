@@ -7,6 +7,7 @@ This script allows you to export your Genotek genealogical tree as a standard GE
 - Adds an export button to the relatives tree page
 - Adds "Download GEDOM" after "Upload GEDCOM" in the own-tree three-dot menu
 - Exports your full genealogical tree in `.ged` format
+- Preserves person comments as GEDCOM notes, including multiline comments
 - Clean, valid GEDCOM 5.5.1 output with no GRAMPS warnings
 
 ## Installation

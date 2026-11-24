@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Genotek family tree downloader
 // @namespace    http://tampermonkey.net/
-// @version      0.6.1
+// @version      0.7.0
 // @description  Export Genotek family trees as GEDCOM
 // @match        https://lk.genotek.ru/*
 // @match        https://my.genotek.eu/*
@@ -14,13 +14,33 @@
     'use strict';
 
     const GRAPH_URL_PART = '/genealogy-graph';
+    const COMMENTS_URL = /\/api\/v1\/tree\/\d+\/comments(?:[?#]|$)/;
     const SEGMENT_URL = /\/api\/v1\/site\/1\/relatives\/[^/]+\/[^/?#]+\/segment(?:[?#]|$)/;
     const SEGMENT_FIELDS = ['chromosome', 'hapId1', 'hapId2', 'startCm', 'endCm', 'startBp', 'endBp', 'ethnicity'];
     const SCIENTIFIC_DATA_LABEL = /^(?:Научные данные|Scientific data)$/i;
     const COMMON_SEGMENTS_LABEL = /^(?:Общие ДНК-сегменты|General DNA segments)$/i;
     let genealogyTree = null;
+    let commentsByCard = {};
     let segmentData = null;
     let segmentEpoch = 0;
+
+    function rememberComments(response) {
+        const data = response?.data && !Array.isArray(response.data)
+            ? response.data
+            : response;
+        if (!data || Array.isArray(data) || typeof data !== 'object') return;
+        commentsByCard = data;
+        window.__myGenealogyComments = data;
+        console.info(`[GEDCOM] Captured history for ${Object.keys(data).length} tree cards`);
+    }
+
+    function parseComments(payload) {
+        try {
+            rememberComments(typeof payload === 'string' ? JSON.parse(payload) : payload);
+        } catch (error) {
+            console.warn('[GEDCOM] Could not parse tree comments response', error);
+        }
+    }
 
     function rememberSegments(response, epoch) {
         if (epoch !== segmentEpoch || !Array.isArray(response?.data)) return;
@@ -82,6 +102,13 @@
                 epoch
             ));
         }
+        if (COMMENTS_URL.test(this.__gedcomUrl || '')) {
+            this.addEventListener('load', () => parseComments(
+                this.responseType === '' || this.responseType === 'text'
+                    ? this.responseText
+                    : this.response
+            ));
+        }
         return originalXhrSend.apply(this, arguments);
     };
 
@@ -90,6 +117,7 @@
         window.fetch = async function (input, init) {
             const url = typeof input === 'string' ? input : input?.url;
             const segmentRequest = SEGMENT_URL.test(url || '');
+            const commentsRequest = COMMENTS_URL.test(url || '');
             const epoch = segmentEpoch;
             const response = await originalFetch.apply(this, arguments);
             if (url?.includes(GRAPH_URL_PART)) {
@@ -100,6 +128,11 @@
             if (segmentRequest) {
                 response.clone().json().then(data => rememberSegments(data, epoch)).catch(error => {
                     console.warn('[GEDCOM] Could not parse segment fetch', error);
+                });
+            }
+            if (commentsRequest) {
+                response.clone().json().then(rememberComments).catch(error => {
+                    console.warn('[GEDCOM] Could not parse tree comments fetch', error);
                 });
             }
             return response;
@@ -342,6 +375,15 @@
             return parts.join(' ');
         }
 
+        function appendMultilineValue(lines, level, tag, value) {
+            if (typeof value !== 'string' || value.length === 0) return;
+            const parts = value.replace(/\r\n?/g, '\n').split('\n');
+            lines.push(`${level} ${tag}${parts[0] ? ` ${parts[0]}` : ''}`);
+            for (const part of parts.slice(1)) {
+                lines.push(`${level + 1} CONT${part ? ` ${part}` : ''}`);
+            }
+        }
+
         // STEP 0: Extract relationships
         for (const node of nodes) {
             if (node.card?.relationships?.length) {
@@ -474,6 +516,13 @@
                 const dateStr = formatGedcomDate(death);
                 if (dateStr) lines.push(`2 DATE ${dateStr}`);
                 if (deathPlace) lines.push(`2 PLAC ${deathPlace}`);
+            }
+
+            const history = commentsByCard[personId] || commentsByCard[card.id] || [];
+            for (const entry of history) {
+                if (entry?.type === 'comment') {
+                    appendMultilineValue(lines, 1, 'NOTE', entry.comment?.text);
+                }
             }
 
             for (const fid of fams) {
